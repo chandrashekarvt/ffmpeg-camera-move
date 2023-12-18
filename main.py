@@ -4,21 +4,24 @@ import shutil;
 import cv2;
 from tqdm import tqdm;
 import json;
+from PIL import Image
+from concurrent.futures import ThreadPoolExecutor
 
 
 
 FILENAME = "segment.mp4"
 AR = 0.525
-CAMERA_MOVE_PER_FRAME = 2 #px
-
+CAMERA_MOVE_PER_FRAME = 5 #px
+NUM_THREADS = 3
 
 OUTPUT_FILE_NAME = "output.mp4"
 FRAME_DIR = "frames"
 OUTPUT_FRAMES_DIR = "out_frames"
 AUDIO_FILE_NAME = "audio.aac"
 
+
 def create_video_from_images(image_path_format, fps, pix_fmt):
-    subprocess.run(["ffmpeg", "-framerate", str(fps), "-i", image_path_format, "-c:v", "libx264", "-r", str(fps),"-pix_fmt", pix_fmt, "-y", OUTPUT_FILE_NAME], shell=True)
+    subprocess.run(["ffmpeg", "-progress", "-", "-nostats", "-framerate", str(fps), "-i", image_path_format, "-c:v", "libx264", "-r", str(fps),"-pix_fmt", pix_fmt, "-y", OUTPUT_FILE_NAME])
 
 def establish_dir(path):
     if os.path.exists(path):
@@ -26,25 +29,30 @@ def establish_dir(path):
     os.mkdir(path)
 
 def detach_audio():
-    subprocess.run(["ffmpeg", "-i", FILENAME, "-vn", "-c:a", "copy", "-y", AUDIO_FILE_NAME], shell=True)
+    subprocess.run(["ffmpeg", "-progress", "-", "-nostats", "-i", FILENAME, "-vn", "-c:a", "copy", "-y", AUDIO_FILE_NAME])
+
 
 def attach_audio():
-    subprocess.run(["ffmpeg", "-i", OUTPUT_FILE_NAME, "-i", AUDIO_FILE_NAME, "-c", "copy", "-map", "0:v:0", "-map", "1:a:0", "-y", "final_video.mp4" ], shell=True)
+    subprocess.run(["ffmpeg", "-progress", "-", "-nostats", "-i", OUTPUT_FILE_NAME, "-i", AUDIO_FILE_NAME, "-c", "copy", "-map", "0:v:0", "-map", "1:a:0", "-y", "final_video.mp4" ])
+
+
+def crop_image(input_path, output_path, box):
+    image = Image.open(input_path)
+    cropped_image = image.crop(box)
+    cropped_image.save(output_path)
+    image.close()
+
 
 def crop_images(video_width, video_height, fps):
     clip_width = int(video_height * AR)
     end = video_width - clip_width
     establish_dir(OUTPUT_FRAMES_DIR)
-    print("Cropping...")
-    for (_, _, files) in os.walk(FRAME_DIR):
-        for file in tqdm(files):
-            img = cv2.imread(f"{FRAME_DIR}/{file}")
-            y=0
-            x=end
-            h=video_height
-            w=clip_width
-            crop = img[y:y+h, x:x+w]
-            cv2.imwrite(f"{OUTPUT_FRAMES_DIR}/{file}",crop)
+    input_paths = [os.path.join(FRAME_DIR, filename) for filename in os.listdir(FRAME_DIR)]
+    with ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
+        for input_path in tqdm(input_paths):
+            filename = os.path.basename(input_path)
+            output_path = os.path.join(OUTPUT_FRAMES_DIR, filename)
+            executor.submit(crop_image, input_path, output_path, (end, 0, end+clip_width, video_height))
             end=max(end-CAMERA_MOVE_PER_FRAME, 0)
 
 
@@ -65,14 +73,15 @@ def get_video_metadata():
 
 def break_video_into_images():
     establish_dir(FRAME_DIR)
-    subprocess.run(["ffmpeg", "-i", FILENAME, f"{FRAME_DIR}/%03d.png"], shell=True)
+    subprocess.run(["ffmpeg", "-progress", "-", "-nostats", "-i", FILENAME, f"{FRAME_DIR}/%03d.jpg"])
     
-
 if __name__ == '__main__':
-    width, height, fps, pix_fmt = get_video_metadata()
-    detach_audio()
-    break_video_into_images()
+    with ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
+        metadata = executor.submit(get_video_metadata)
+        executor.submit(detach_audio)
+        image_generator = executor.submit(break_video_into_images)
+    width, height, fps, pix_fmt = metadata.result()
     crop_images(width, height, fps)
-    create_video_from_images(f"{OUTPUT_FRAMES_DIR}/%03d.png", fps, pix_fmt)
+    create_video_from_images(f"{OUTPUT_FRAMES_DIR}/%03d.jpg", fps, pix_fmt)
     attach_audio()
     clean_up()
