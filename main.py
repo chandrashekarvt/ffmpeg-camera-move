@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 FILENAME = "segment.mp4"
 AR = 0.525
-CAMERA_MOVE_PER_FRAME = 5 #px
+CAMERA_MOVE_PER_FRAME = 4 #px
 NUM_THREADS = 3
 
 OUTPUT_FILE_NAME = "output.mp4"
@@ -47,7 +47,7 @@ def crop_images(video_width, video_height, fps):
     clip_width = int(video_height * AR)
     end = video_width - clip_width
     establish_dir(OUTPUT_FRAMES_DIR)
-    input_paths = [os.path.join(FRAME_DIR, filename) for filename in os.listdir(FRAME_DIR)]
+    input_paths = [os.path.join(FRAME_DIR, filename) for filename in sorted(os.listdir(FRAME_DIR))]
     with ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
         for input_path in tqdm(input_paths):
             filename = os.path.basename(input_path)
@@ -57,10 +57,12 @@ def crop_images(video_width, video_height, fps):
 
 
 def clean_up(): 
-    os.remove(OUTPUT_FILE_NAME)
-    os.remove(AUDIO_FILE_NAME)
     shutil.rmtree(FRAME_DIR)
     shutil.rmtree(OUTPUT_FRAMES_DIR)
+    if os.path.exists(AUDIO_FILE_NAME):
+        os.remove(AUDIO_FILE_NAME)
+    if os.path.exists(OUTPUT_FILE_NAME):
+        os.remove(OUTPUT_FILE_NAME)
 
 
 def get_video_metadata():
